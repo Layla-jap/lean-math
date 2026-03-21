@@ -1,0 +1,21 @@
+# Lean build artifacts
+.olean/
+.ilean/
+lake-packages/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Download files
+*.zip
+*.exe

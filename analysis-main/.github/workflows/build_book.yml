@@ -1,0 +1,101 @@
+name: Build book
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}  # Group runs by the ref (branch or PR)
+  cancel-in-progress: true  # Cancel any ongoing runs in the same group
+
+defaults:
+  run:
+    working-directory: ./book
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan
+        run: curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y
+      # The build directories for analysis/ and book/ are cached separately, because they
+      # use disjoint sets of build dependencies. There's no need to rebuild both completely
+      # when only one has a version bump.
+      - name: Restore cache if available
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ./analysis/.lake
+          key: lake-${{ runner.os }}-${{ runner.arch}}-${{ hashFiles('analysis/lean-toolchain') }}-${{ hashFiles('analysis/lake-manifest.json') }}-${{ github.sha }}
+          restore-keys: lake-${{ runner.os }}-${{ runner.arch}}-${{ hashFiles('analysis/lean-toolchain') }}-${{ hashFiles('analysis/lake-manifest.json') }}
+      - name: Restore book cache if available
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ./book/.lake
+          key: lake-${{ runner.os }}-${{ runner.arch}}-${{ hashFiles('book/lean-toolchain') }}-${{ hashFiles('book/lake-manifest.json') }}-${{ github.sha }}
+          restore-keys: lake-${{ runner.os }}-${{ runner.arch}}-${{ hashFiles('book/lean-toolchain') }}-${{ hashFiles('book/lake-manifest.json') }}
+
+      # Getting the mathlib cache is only useful when mathlib gets updated, but will save a lot of time in that case.
+      - name: Get Mathlib cache
+        run: ~/.elan/bin/lake exe cache get || true
+        working-directory: ./analysis
+      - name: Build doc-gen
+        run: ~/.elan/bin/lake -R -Kenv=dev build Analysis:docs
+        working-directory: ./analysis
+      - name: Build metadata of project
+        run: ~/.elan/bin/lake build
+        working-directory: ./analysis
+      - name: Build book
+        run: |
+          ~/.elan/bin/lake exe analysis-book 
+      - name: Copy docs to analysis-book
+        run: |
+          cp -r ../analysis/.lake/build/doc _site/docs
+      - name: Remove unnecessary lake files from documentation in `_site/docs`
+        run: |
+          find _site/docs -name "*.trace" -delete
+          find _site/docs -name "*.hash" -delete
+      # The cache for analysis/ is saved here, rather than before building the book, because
+      # building the book generates JSON files full of literate program artifacts in analysis/.lake
+      - name: Save cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ./analysis/.lake
+          key: lake-${{ runner.os }}-${{ runner.arch}}-${{ hashFiles('analysis/lean-toolchain') }}-${{ hashFiles('analysis/lake-manifest.json') }}-${{ github.sha }}
+      - name: Save book cache
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ./book/.lake
+          key: lake-${{ runner.os }}-${{ runner.arch}}-${{ hashFiles('book/lean-toolchain') }}-${{ hashFiles('book/lake-manifest.json') }}-${{ github.sha }}
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './book/_site'
+  deploy:
+    # Add a dependency to the build job
+    needs: build
+
+    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
+    permissions:
+      pages: write      # to deploy to Pages
+      id-token: write   # to verify the deployment originates from an appropriate source
+
+    # Deploy to the github-pages environment
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    # Specify runner + deployment step
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
